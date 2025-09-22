@@ -6,6 +6,8 @@ const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 3001;
 const SERVE_DIR = process.env.SERVE_DIR || './public';
+const AUTH_KEY = process.env.AUTH_KEY || 'changeme123';
+const REQUIRE_AUTH = process.env.REQUIRE_AUTH !== 'false';
 
 // Ensure the serve directory exists
 if (!fs.existsSync(SERVE_DIR)) {
@@ -46,13 +48,40 @@ const upload = multer({
 // Enable CORS if needed
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
   next();
 });
 
 // Parse JSON bodies
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Simple authentication middleware
+const authenticate = (req, res, next) => {
+  if (!REQUIRE_AUTH) {
+    return next();
+  }
+
+  const authHeader = req.headers.authorization;
+  const providedKey = authHeader ? authHeader.replace('Bearer ', '') : req.query.key;
+
+  if (!providedKey || providedKey !== AUTH_KEY) {
+    return res.status(401).json({ error: 'Unauthorized. Please provide a valid auth key.' });
+  }
+
+  next();
+};
+
+// Auth check endpoint
+app.post('/auth/check', (req, res) => {
+  const { key } = req.body;
+  if (!REQUIRE_AUTH || key === AUTH_KEY) {
+    res.json({ success: true });
+  } else {
+    res.status(401).json({ success: false, error: 'Invalid auth key' });
+  }
+});
 
 // Serve static files with proper mime types
 app.use(express.static(SERVE_DIR, {
@@ -77,7 +106,7 @@ app.get('/', (req, res) => {
 });
 
 // Handle single file upload
-app.post('/upload', upload.single('image'), (req, res) => {
+app.post('/upload', authenticate, upload.single('image'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
   }
@@ -91,7 +120,7 @@ app.post('/upload', upload.single('image'), (req, res) => {
 });
 
 // Handle multiple file uploads
-app.post('/upload-multiple', upload.array('images', 10), (req, res) => {
+app.post('/upload-multiple', authenticate, upload.array('images', 10), (req, res) => {
   if (!req.files || req.files.length === 0) {
     return res.status(400).json({ error: 'No files uploaded' });
   }
@@ -110,7 +139,7 @@ app.post('/upload-multiple', upload.array('images', 10), (req, res) => {
 });
 
 // Delete an image
-app.delete('/delete/:filename', (req, res) => {
+app.delete('/delete/:filename', authenticate, (req, res) => {
   const filepath = path.join(SERVE_DIR, req.params.filename);
 
   fs.unlink(filepath, (err) => {

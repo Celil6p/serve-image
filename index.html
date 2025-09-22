@@ -256,9 +256,109 @@
                 padding: 40px 15px;
             }
         }
+        .auth-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .auth-modal.active {
+            display: flex;
+        }
+
+        .auth-content {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 400px;
+            width: 90%;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+
+        .auth-title {
+            font-size: 1.5rem;
+            color: #333;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .auth-input {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 1rem;
+            margin-bottom: 15px;
+        }
+
+        .auth-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .auth-btn {
+            width: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        .auth-btn:hover {
+            transform: translateY(-2px);
+        }
+
+        .auth-error {
+            color: #f44336;
+            font-size: 0.9rem;
+            margin-top: 10px;
+            text-align: center;
+            display: none;
+        }
+
+        .logout-btn {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: #ff4444;
+            color: white;
+            border: none;
+            padding: 8px 20px;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: background 0.3s;
+            z-index: 100;
+        }
+
+        .logout-btn:hover {
+            background: #dd3333;
+        }
     </style>
 </head>
 <body>
+    <button class="logout-btn" id="logoutBtn" style="display: none;" onclick="logout()">Logout</button>
+
+    <div class="auth-modal" id="authModal">
+        <div class="auth-content">
+            <h2 class="auth-title">Authentication Required</h2>
+            <input type="password" class="auth-input" id="authKey" placeholder="Enter auth key" />
+            <button class="auth-btn" onclick="authenticate()">Authenticate</button>
+            <div class="auth-error" id="authError">Invalid auth key</div>
+        </div>
+    </div>
+
     <div class="container">
         <h1>Image Upload & Gallery</h1>
 
@@ -304,6 +404,95 @@
         const uploadSuccess = document.getElementById('uploadSuccess');
         const uploadError = document.getElementById('uploadError');
         const galleryGrid = document.getElementById('galleryGrid');
+        const authModal = document.getElementById('authModal');
+        const authKeyInput = document.getElementById('authKey');
+        const authError = document.getElementById('authError');
+        const logoutBtn = document.getElementById('logoutBtn');
+
+        // Get auth key from localStorage
+        let authKey = localStorage.getItem('authKey') || '';
+
+        // Check authentication on page load
+        function checkAuth() {
+            if (authKey) {
+                fetch('/auth/check', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ key: authKey })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        authModal.classList.remove('active');
+                        logoutBtn.style.display = 'block';
+                        loadGallery();
+                    } else {
+                        authKey = '';
+                        localStorage.removeItem('authKey');
+                        authModal.classList.add('active');
+                    }
+                })
+                .catch(() => {
+                    authModal.classList.add('active');
+                });
+            } else {
+                authModal.classList.add('active');
+            }
+        }
+
+        // Authenticate function
+        function authenticate() {
+            const key = authKeyInput.value;
+            if (!key) {
+                authError.style.display = 'block';
+                authError.textContent = 'Please enter an auth key';
+                return;
+            }
+
+            fetch('/auth/check', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ key: key })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    authKey = key;
+                    localStorage.setItem('authKey', authKey);
+                    authModal.classList.remove('active');
+                    authError.style.display = 'none';
+                    logoutBtn.style.display = 'block';
+                    loadGallery();
+                } else {
+                    authError.style.display = 'block';
+                    authError.textContent = 'Invalid auth key';
+                }
+            })
+            .catch(() => {
+                authError.style.display = 'block';
+                authError.textContent = 'Authentication error. Please try again.';
+            });
+        }
+
+        // Logout function
+        function logout() {
+            authKey = '';
+            localStorage.removeItem('authKey');
+            authModal.classList.add('active');
+            logoutBtn.style.display = 'none';
+            galleryGrid.innerHTML = '<div class="empty-gallery">Please authenticate to view gallery</div>';
+        }
+
+        // Handle Enter key in auth input
+        authKeyInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                authenticate();
+            }
+        });
 
         // Prevent default drag behaviors
         ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
@@ -366,6 +555,9 @@
 
             fetch('/upload-multiple', {
                 method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${authKey}`
+                },
                 body: formData
             })
             .then(response => response.json())
@@ -415,7 +607,10 @@
             if (!confirm('Are you sure you want to delete this image?')) return;
 
             fetch(`/delete/${filename}`, {
-                method: 'DELETE'
+                method: 'DELETE',
+                headers: {
+                    'Authorization': `Bearer ${authKey}`
+                }
             })
             .then(response => response.json())
             .then(data => {
@@ -432,6 +627,11 @@
         }
 
         function loadGallery() {
+            if (!authKey) {
+                galleryGrid.innerHTML = '<div class="empty-gallery">Please authenticate to view gallery</div>';
+                return;
+            }
+
             fetch('/list')
                 .then(response => response.json())
                 .then(files => {
@@ -457,7 +657,7 @@
         }
 
         // Load gallery on page load
-        document.addEventListener('DOMContentLoaded', loadGallery);
+        document.addEventListener('DOMContentLoaded', checkAuth);
     </script>
 </body>
 </html>
