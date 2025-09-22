@@ -1,9 +1,10 @@
 const express = require('express');
+const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
 const SERVE_DIR = process.env.SERVE_DIR || './public';
 
 // Ensure the serve directory exists
@@ -11,12 +12,47 @@ if (!fs.existsSync(SERVE_DIR)) {
   fs.mkdirSync(SERVE_DIR, { recursive: true });
 }
 
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, SERVE_DIR);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.originalname);
+    const name = path.basename(file.originalname, ext);
+    cb(null, name + '-' + uniqueSuffix + ext);
+  }
+});
+
+const fileFilter = (req, file, cb) => {
+  const allowedTypes = /jpeg|jpg|png|gif|svg|webp/;
+  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+  const mimetype = allowedTypes.test(file.mimetype);
+
+  if (mimetype && extname) {
+    return cb(null, true);
+  } else {
+    cb(new Error('Only image files are allowed'));
+  }
+};
+
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB max
+  fileFilter: fileFilter
+});
+
 // Enable CORS if needed
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
   next();
 });
+
+// Parse JSON bodies
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Serve static files with proper mime types
 app.use(express.static(SERVE_DIR, {
@@ -35,6 +71,56 @@ app.use(express.static(SERVE_DIR, {
   }
 }));
 
+// Serve the upload page
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+// Handle single file upload
+app.post('/upload', upload.single('image'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
+  res.json({
+    success: true,
+    filename: req.file.filename,
+    originalName: req.file.originalname,
+    size: req.file.size,
+    url: `/${req.file.filename}`
+  });
+});
+
+// Handle multiple file uploads
+app.post('/upload-multiple', upload.array('images', 10), (req, res) => {
+  if (!req.files || req.files.length === 0) {
+    return res.status(400).json({ error: 'No files uploaded' });
+  }
+
+  const uploadedFiles = req.files.map(file => ({
+    filename: file.filename,
+    originalName: file.originalname,
+    size: file.size,
+    url: `/${file.filename}`
+  }));
+
+  res.json({
+    success: true,
+    files: uploadedFiles
+  });
+});
+
+// Delete an image
+app.delete('/delete/:filename', (req, res) => {
+  const filepath = path.join(SERVE_DIR, req.params.filename);
+
+  fs.unlink(filepath, (err) => {
+    if (err) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    res.json({ success: true, message: 'File deleted successfully' });
+  });
+});
+
 // Directory listing endpoint (optional)
 app.get('/list', (req, res) => {
   const directoryPath = path.join(SERVE_DIR);
@@ -44,14 +130,21 @@ app.get('/list', (req, res) => {
       return res.status(500).json({ error: 'Unable to scan directory' });
     }
 
-    const fileList = files.map(file => {
+    const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.svg', '.webp'];
+    const imageFiles = files.filter(file => {
+      const ext = path.extname(file).toLowerCase();
+      return imageExtensions.includes(ext);
+    });
+
+    const fileList = imageFiles.map(file => {
       const filePath = path.join(directoryPath, file);
       const stats = fs.statSync(filePath);
       return {
         name: file,
         size: stats.size,
         isDirectory: stats.isDirectory(),
-        modified: stats.mtime
+        modified: stats.mtime,
+        url: `/${file}`
       };
     });
 
